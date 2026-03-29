@@ -1,0 +1,30 @@
+name: Validate HTML
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'index.html'
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install html5validator
+        run: pip install html5validator
+
+      - name: Run HTML validation
+        run: html5validator --root . --also-check-css index.html
+
+      - name: Check for unescaped innerHTML usage without sanitize
+        run: |
+          # Fail if innerHTML is used directly with user input (without sanitize)
+          if grep -n 'innerHTML.*cmd\|innerHTML.*input\|innerHTML.*value' index.html; then
+            echo "::error::Potential XSS: innerHTML used with user input without sanitize()"
+            exit 1
+          fi
+          echo "XSS check passed."

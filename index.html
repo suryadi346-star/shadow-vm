@@ -1,0 +1,383 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Shadow VM</title>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;700&display=swap');
+
+        :root {
+            --bg:        #080b08;
+            --surface:   #0f140f;
+            --green:     #00ff41;
+            --green-dim: #00c032;
+            --green-glow:#00ff4133;
+            --red:       #ff003c;
+            --amber:     #ffb300;
+            --grey:      #4a5a4a;
+            --white:     #c8d8c8;
+        }
+
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+
+        body {
+            background: var(--bg);
+            color: var(--green);
+            font-family: 'JetBrains Mono', 'Courier New', monospace;
+            font-size: 14px;
+            line-height: 1.6;
+            height: 100dvh;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+
+        /* ── Scanline overlay ── */
+        body::before {
+            content: '';
+            position: fixed;
+            inset: 0;
+            background: repeating-linear-gradient(
+                0deg,
+                transparent,
+                transparent 2px,
+                rgba(0,0,0,.15) 2px,
+                rgba(0,0,0,.15) 4px
+            );
+            pointer-events: none;
+            z-index: 999;
+        }
+
+        /* ── Header bar ── */
+        #header {
+            flex-shrink: 0;
+            background: var(--surface);
+            border-bottom: 1px solid var(--green-dim);
+            padding: 6px 14px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            font-size: 11px;
+            color: var(--grey);
+        }
+        #header .title { color: var(--green); letter-spacing: 3px; font-weight: 700; }
+        #header .meta  { display: flex; gap: 20px; }
+        #clock { color: var(--amber); }
+
+        /* ── Output area ── */
+        #output {
+            flex: 1;
+            overflow-y: auto;
+            padding: 12px 14px 4px;
+            scroll-behavior: smooth;
+        }
+
+        #output::-webkit-scrollbar { width: 4px; }
+        #output::-webkit-scrollbar-track { background: transparent; }
+        #output::-webkit-scrollbar-thumb { background: var(--green-dim); border-radius: 2px; }
+
+        .line { margin: 1px 0; word-break: break-all; }
+
+        /* ── Input bar (always pinned bottom) ── */
+        #input-bar {
+            flex-shrink: 0;
+            border-top: 1px solid #1a2a1a;
+            background: var(--surface);
+            padding: 8px 14px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .prompt {
+            color: var(--red);
+            white-space: nowrap;
+            user-select: none;
+            flex-shrink: 0;
+        }
+        .prompt .at   { color: var(--grey); }
+        .prompt .host { color: var(--amber); }
+        .prompt .path { color: var(--green-dim); }
+
+        #cmd-input {
+            flex: 1;
+            background: transparent;
+            border: none;
+            outline: none;
+            color: var(--green);
+            font-family: inherit;
+            font-size: inherit;
+            caret-color: var(--green);
+        }
+
+        /* ── Token colors ── */
+        .c-sys    { color: var(--grey); }
+        .c-ok     { color: var(--green); }
+        .c-warn   { color: var(--amber); }
+        .c-err    { color: var(--red); }
+        .c-cmd    { color: var(--white); }
+        .c-key    { color: var(--amber); }
+        .c-val    { color: var(--green-dim); }
+        .c-sep    { color: var(--grey); }
+
+        /* ── Boot animation ── */
+        @keyframes blink { 0%,100%{opacity:1} 50%{opacity:0} }
+        .cursor { display: inline-block; width: 8px; height: 14px; background: var(--green); animation: blink 1s step-end infinite; vertical-align: text-bottom; }
+
+        /* ── Glow effect on focus ── */
+        #input-bar:focus-within {
+            box-shadow: 0 -1px 12px var(--green-glow);
+        }
+    </style>
+</head>
+<body>
+
+<div id="header">
+    <span class="title">SHADOW VM</span>
+    <span class="meta">
+        <span>v1.0-lite</span>
+        <span>arm64</span>
+        <span id="clock">--:--:--</span>
+    </span>
+</div>
+
+<div id="output"></div>
+
+<div id="input-bar">
+    <span class="prompt">
+        <span class="c-err">root</span><span class="at">@</span><span class="host">shadow</span><span class="c-sep">:</span><span class="path">~</span><span class="c-sep">#</span>
+    </span>
+    <input type="text" id="cmd-input" autofocus autocomplete="off" spellcheck="false" aria-label="terminal input">
+</div>
+
+<script>
+// ─────────────────────────────────────────────
+//  SHADOW VM — Core Engine
+// ─────────────────────────────────────────────
+
+const $ = id => document.getElementById(id);
+const out = $('output');
+const inp = $('cmd-input');
+
+// ── Utility ──────────────────────────────────
+function sanitize(str) {
+    return String(str)
+        .replace(/&/g,'&amp;')
+        .replace(/</g,'&lt;')
+        .replace(/>/g,'&gt;')
+        .replace(/"/g,'&quot;');
+}
+
+function print(html, cls = '') {
+    const d = document.createElement('div');
+    d.className = 'line' + (cls ? ' ' + cls : '');
+    d.innerHTML = html;
+    out.appendChild(d);
+    out.scrollTop = out.scrollHeight;
+}
+
+function kv(key, val, extra = '') {
+    return `<span class="c-key">${sanitize(key)}</span><span class="c-sep">: </span><span class="c-val">${val}</span>${extra}`;
+}
+
+// ── Clock ─────────────────────────────────────
+function updateClock() {
+    $('clock').textContent = new Date().toLocaleTimeString('id-ID', {hour12: false});
+}
+updateClock();
+setInterval(updateClock, 1000);
+
+// ── History ───────────────────────────────────
+const history = [];
+let histIdx = -1;
+
+// ── Commands ──────────────────────────────────
+const COMMANDS = {
+
+    help() {
+        const cmds = [
+            ['help',       'tampilkan daftar command'],
+            ['whoami',     'identitas current user'],
+            ['uname',      'info kernel & arsitektur'],
+            ['uname -a',   'full system string'],
+            ['uptime',     'runtime VM sejak boot'],
+            ['memory',     'status RAM simulated'],
+            ['ps',         'proses aktif (simulated)'],
+            ['env',        'environment variables'],
+            ['dev-status', 'mode developer & target device'],
+            ['echo [teks]','cetak teks ke output'],
+            ['date',       'tanggal & waktu sekarang'],
+            ['clear',      'bersihkan terminal'],
+            ['exit',       'matikan VM (reload)'],
+        ];
+        print('<span class="c-sys">── Available Commands ─────────────────</span>');
+        cmds.forEach(([c, d]) => {
+            print(`  <span class="c-key">${c.padEnd(16)}</span><span class="c-sys">${d}</span>`);
+        });
+        print('<span class="c-sys">───────────────────────────────────────</span>');
+    },
+
+    whoami: () => print(kv('user', 'root') + ' &nbsp; ' + kv('role', 'Mastermind') + ' &nbsp; ' + kv('clearance', '<span class="c-err">MAXIMUM</span>')),
+
+    uname(args) {
+        if (args.includes('-a')) {
+            print('<span class="c-val">Linux shadow-vm 5.10.0-arm64-lite #1 SMP PREEMPT Shadow-OS aarch64 GNU/Linux</span>');
+        } else {
+            print('<span class="c-val">Linux</span>');
+        }
+    },
+
+    uptime() {
+        const s = Math.floor(performance.now() / 1000);
+        const h = String(Math.floor(s / 3600)).padStart(2,'0');
+        const m = String(Math.floor((s % 3600) / 60)).padStart(2,'0');
+        const sec = String(s % 60).padStart(2,'0');
+        print(kv('up', `${h}:${m}:${sec}`) + ' &nbsp; ' + kv('load', '0.08 0.04 0.01'));
+    },
+
+    memory() {
+        const used = Math.floor(Math.random() * 400) + 200;
+        const total = 1536;
+        const pct = Math.round(used / total * 100);
+        const bar = '█'.repeat(Math.floor(pct/5)) + '░'.repeat(20 - Math.floor(pct/5));
+        print(kv('total', `${total}MB`) + ' &nbsp; ' + kv('used', `${used}MB`) + ' &nbsp; ' + kv('free', `${total - used}MB`));
+        print(`<span class="c-sys">  [${bar}] ${pct}%</span>`);
+    },
+
+    ps() {
+        const procs = [
+            [1,    'init',          'S', '0.0'],
+            [12,   'kworker/0:1',   'S', '0.0'],
+            [88,   'shadow-daemon', 'S', '0.3'],
+            [101,  'termux-sshd',   'S', '0.1'],
+            [204,  'shadow-vm',     'R', '1.2'],
+        ];
+        print('<span class="c-sys">  PID  CMD               STAT  CPU%</span>');
+        procs.forEach(([pid, cmd, stat, cpu]) => {
+            print(`  <span class="c-val">${String(pid).padEnd(5)}</span><span class="c-cmd">${cmd.padEnd(18)}</span><span class="c-key">${stat}     </span><span class="c-sys">${cpu}</span>`);
+        });
+    },
+
+    env() {
+        const vars = {
+            SHELL: '/bin/bash',
+            TERM: 'xterm-256color',
+            USER: 'root',
+            HOME: '/root',
+            LANG: 'id_ID.UTF-8',
+            SHADOW_MODE: 'ACTIVE',
+            ARCH: 'aarch64',
+        };
+        Object.entries(vars).forEach(([k, v]) => print(kv(k, v)));
+    },
+
+    'dev-status': () => {
+        print(kv('mode',   '<span class="c-err">DEVELOPER</span>'));
+        print(kv('target', 'Samsung J2 Pro / Termux'));
+        print(kv('stack',  'Python 3.11 · SQLite · AES-256-GCM'));
+        print(kv('project','Asisten Shadow v3.0.x'));
+        print(kv('status', '<span class="c-warn">ACTIVE BUILD</span>'));
+    },
+
+    date: () => print(`<span class="c-val">${new Date().toLocaleString('id-ID', {weekday:'long',year:'numeric',month:'long',day:'numeric',hour:'2-digit',minute:'2-digit',second:'2-digit'})}</span>`),
+
+    echo(args) {
+        if (!args.length) { print(''); return; }
+        print(`<span class="c-white">${sanitize(args.join(' '))}</span>`);
+    },
+
+    clear() {
+        out.innerHTML = '';
+    },
+
+    exit() {
+        print('<span class="c-warn">Shutting down Shadow VM...</span>');
+        setTimeout(() => location.reload(), 1200);
+    },
+};
+
+// ── Parser ────────────────────────────────────
+function execute(raw) {
+    const trimmed = raw.trim();
+
+    // echo input line
+    if (trimmed !== '') {
+        print(
+            `<span class="c-err">root</span><span class="c-sep">@</span><span class="c-warn">shadow</span><span class="c-sep">:~# </span><span class="c-cmd">${sanitize(trimmed)}</span>`,
+            'c-sys'
+        );
+    }
+
+    if (!trimmed) return;
+
+    const parts = trimmed.split(/\s+/);
+    const cmd   = parts[0].toLowerCase();
+    const args  = parts.slice(1);
+
+    // check alias uname -a
+    const key = args.length ? `${cmd} ${args[0]}` : cmd;
+    const handler = COMMANDS[key] || COMMANDS[cmd];
+
+    if (handler) {
+        handler(args);
+    } else {
+        print(`<span class="c-err">command not found: ${sanitize(cmd)}</span> &nbsp;<span class="c-sys">— try 'help'</span>`);
+    }
+
+    print(''); // spacing
+}
+
+// ── Input events ──────────────────────────────
+inp.addEventListener('keydown', e => {
+    if (e.key === 'Enter') {
+        const val = inp.value;
+        if (val.trim()) { history.unshift(val); histIdx = -1; }
+        execute(val);
+        inp.value = '';
+    } else if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        if (histIdx < history.length - 1) { histIdx++; inp.value = history[histIdx]; }
+    } else if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        if (histIdx > 0) { histIdx--; inp.value = history[histIdx]; }
+        else { histIdx = -1; inp.value = ''; }
+    } else if (e.key === 'Tab') {
+        e.preventDefault();
+        // simple autocomplete
+        const partial = inp.value.toLowerCase();
+        if (!partial) return;
+        const match = Object.keys(COMMANDS).find(k => k.startsWith(partial));
+        if (match) inp.value = match;
+    } else if (e.key === 'l' && e.ctrlKey) {
+        e.preventDefault();
+        COMMANDS.clear();
+    } else if (e.key === 'c' && e.ctrlKey) {
+        e.preventDefault();
+        print(`<span class="c-err">root</span><span class="c-sep">@</span><span class="c-warn">shadow</span><span class="c-sep">:~# </span><span class="c-cmd">${sanitize(inp.value)} ^C</span>`);
+        print('');
+        inp.value = '';
+    }
+});
+
+// keep focus
+document.addEventListener('click', () => inp.focus());
+
+// ── Boot sequence ─────────────────────────────
+(function boot() {
+    const lines = [
+        { t: 0,   html: '<span class="c-sys">BIOS Shadow Edition 1.0 — aarch64</span>' },
+        { t: 200, html: '<span class="c-sys">Initializing memory controller......... <span class="c-ok">OK</span></span>' },
+        { t: 380, html: '<span class="c-sys">Mounting rootfs......................... <span class="c-ok">OK</span></span>' },
+        { t: 520, html: '<span class="c-sys">Loading shadow-daemon................... <span class="c-ok">OK</span></span>' },
+        { t: 680, html: '<span class="c-sys">Starting encrypted vault................ <span class="c-ok">OK</span></span>' },
+        { t: 820, html: '' },
+        { t: 900, html: '<span class="c-err" style="font-weight:700;letter-spacing:2px">SHADOW VM v1.0 — READY</span>' },
+        { t: 1050,html: '<span class="c-sys">Type <span class="c-key">help</span> to list commands. <span class="c-key">Tab</span> autocomplete. <span class="c-key">↑↓</span> history.</span>' },
+        { t: 1150,html: '' },
+    ];
+    lines.forEach(({ t, html }) => setTimeout(() => print(html), t));
+})();
+</script>
+</body>
+</html>
