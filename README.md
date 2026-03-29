@@ -1,10 +1,10 @@
-# Shadow VM
+# Shadow-VM
 
 > A retro hacker-aesthetic terminal emulator running entirely in the browser — no backend, no dependencies.
 
-[![Deploy](https://github.com/suryadiarsyil-ops/shadow-vm/actions/workflows/deploy.yml/badge.svg)](https://github.com/suryadiarsyil-ops/shadow-vm/actions/workflows/deploy.yml)
+[![Deploy](https://github.com/suryadi346-star/shadow-vm/actions/workflows/deploy.yml/badge.svg)](https://github.com/suryadi346-star/shadow-vm/actions/workflows/deploy.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![Version](https://img.shields.io/github/v/release/suryadiarsyil-ops/shadow-vm)](https://github.com/suryadiarsyil-ops/shadow-vm/releases)
+[![Version](https://img.shields.io/github/v/release/suryadi346-star/shadow-vm)](https://github.com/suryadi346-star/shadow-vm/releases)
 
 **[→ Live Demo](https://suryadi346-star.github.io/shadow-vm)**
 
@@ -59,6 +59,5 @@ See [CHANGELOG.md](CHANGELOG.md).
 
 ## License
 
-MIT © [suryadiarsyil-ops](https://github.com/suryadi346-star)
-# shadow-vm
+MIT © [suryadi346-star](https://github.com/suryadi346-star)
 # shadow-vm
