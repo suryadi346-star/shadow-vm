@@ -1,13 +1,414 @@
-<!doctype html>
-<html lang="en">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>My Google AI Studio App</title>
-  </head>
-  <body>
-    <div id="root"></div>
-    <script type="module" src="/src/main.tsx"></script>
-  </body>
-</html>
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>SHADOW VM - Terminal OS</title>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;700&display=swap');
 
+        :root {
+            --bg:        #050705;
+            --surface:   #0a0f0a;
+            --green:     #00ff41;
+            --green-dim: #008f11;
+            --green-glow: rgba(0, 255, 65, 0.2);
+            --red:       #ff3131;
+            --amber:     #ffb300;
+            --grey:      #555;
+            --white:     #d1d1d1;
+        }
+
+        * { box-sizing: border-box; margin: 0; padding: 0; touch-action: manipulation; }
+
+        body {
+            background: var(--bg);
+            color: var(--green);
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 14px; /* Ukuran lebih besar untuk HP */
+            height: 100dvh;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+            text-shadow: 0 0 2px var(--green-glow);
+        }
+
+        /* --- CRT & Scanline Effects --- */
+        .crt-overlay {
+            position: fixed;
+            top: 0; left: 0; width: 100%; height: 100%;
+            background: linear-gradient(rgba(18, 16, 16, 0) 50%, rgba(0, 0, 0, 0.1) 50%), 
+                        linear-gradient(90deg, rgba(255, 0, 0, 0.03), rgba(0, 255, 0, 0.01), rgba(0, 0, 255, 0.03));
+            z-index: 10;
+            background-size: 100% 3px, 3px 100%;
+            pointer-events: none;
+            opacity: 0.8;
+        }
+
+        /* --- UI Components --- */
+        #header {
+            background: var(--surface);
+            padding: 8px 15px;
+            display: flex;
+            justify-content: space-between;
+            border-bottom: 1px solid var(--green-dim);
+            font-size: 10px;
+            z-index: 11;
+        }
+
+        #output {
+            flex: 1;
+            overflow-y: auto;
+            padding: 15px;
+            white-space: pre-wrap;
+            word-break: break-all;
+            z-index: 5;
+            padding-bottom: 20px;
+        }
+
+        /* Toolbar khusus HP */
+        #mobile-tools {
+            display: flex;
+            background: #000;
+            border-top: 1px solid #222;
+            padding: 5px;
+            gap: 5px;
+            z-index: 11;
+        }
+
+        .tool-btn {
+            flex: 1;
+            background: #111;
+            border: 1px solid var(--green-dim);
+            color: var(--green);
+            padding: 8px 0;
+            font-family: inherit;
+            font-size: 12px;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+
+        .tool-btn:active {
+            background: var(--green-dim);
+            color: #000;
+        }
+
+        #input-bar {
+            background: var(--surface);
+            padding: 12px 15px;
+            display: flex;
+            align-items: center;
+            border-top: 1px solid #111;
+            z-index: 11;
+        }
+
+        .prompt { color: var(--red); font-weight: bold; margin-right: 5px; white-space: nowrap; }
+        .prompt-path { color: var(--green-dim); }
+
+        #cmd-input {
+            flex: 1;
+            background: transparent;
+            border: none;
+            outline: none;
+            color: var(--white);
+            font-family: inherit;
+            font-size: 16px; /* Mencegah auto-zoom di iOS */
+            caret-color: var(--green);
+            width: 100%;
+        }
+
+        /* --- Colors --- */
+        .c-green { color: var(--green); }
+        .c-amber { color: var(--amber); }
+        .c-red   { color: var(--red); }
+        .c-white { color: var(--white); }
+        .bold    { font-weight: bold; }
+
+        #matrix-canvas {
+            position: fixed;
+            top: 0; left: 0;
+            width: 100%; height: 100%;
+            z-index: 1;
+            display: none;
+            opacity: 0.4;
+        }
+
+        @media (max-width: 600px) {
+            body { font-size: 12px; }
+            #cmd-input { font-size: 14px; }
+        }
+    </style>
+</head>
+<body>
+
+<div class="crt-overlay"></div>
+<canvas id="matrix-canvas"></canvas>
+
+<div id="header">
+    <span class="bold">SHADOW-OS v3.0.0</span>
+    <span id="clock">00:00:00</span>
+</div>
+
+<div id="output"></div>
+
+<!-- Mobile Toolbar -->
+<div id="mobile-tools">
+    <button class="tool-btn" onclick="handleTool('TAB')">TAB</button>
+    <button class="tool-btn" onclick="handleTool('UP')">▲</button>
+    <button class="tool-btn" onclick="handleTool('DOWN')">▼</button>
+    <button class="tool-btn" onclick="handleTool('CLR')">CLR</button>
+</div>
+
+<div id="input-bar">
+    <span class="prompt">root@shadow:<span class="prompt-path" id="current-path">~</span>#</span>
+    <input type="text" id="cmd-input" autofocus spellcheck="false" autocomplete="off" autocapitalize="none">
+</div>
+
+<script>
+/**
+ * SHADOW VM - CORE LOGIC
+ */
+
+const out = document.getElementById('output');
+const inp = document.getElementById('cmd-input');
+const pathDisplay = document.getElementById('current-path');
+const canvas = document.getElementById('matrix-canvas');
+const ctx = canvas.getContext('2d');
+
+let currentDir = "~";
+const fs = {
+    "~": {
+        "projects": {
+            "ai_assistant.py": "# Shadow AI Core\nprint('Initializing...')",
+        },
+        "logs": { "auth.log": "Login success from 192.168.1.1" },
+        "readme.txt": "Selamat datang di Shadow VM.\nGunakan 'help' untuk bantuan."
+    }
+};
+
+const print = (text, cls = '') => {
+    const div = document.createElement('div');
+    div.className = cls;
+    div.innerHTML = text;
+    out.appendChild(div);
+    // Smooth scroll ke bawah
+    setTimeout(() => {
+        out.scrollTop = out.scrollHeight;
+    }, 10);
+};
+
+const updateClock = () => {
+    document.getElementById('clock').textContent = new Date().toLocaleTimeString('id-ID');
+};
+setInterval(updateClock, 1000);
+
+// --- Commands ---
+const COMMANDS = {
+    help: () => {
+        print(`
+<span class="c-amber">Sistem Bantuan Shadow VM</span>
+---------------------------------------
+<span class="c-green">ls</span>             Daftar file/folder
+<span class="c-green">cd [dir]</span>       Pindah direktori
+<span class="c-green">cat [file]</span>     Baca isi file
+<span class="c-green">mkdir [name]</span>   Buat direktori baru
+<span class="c-green">clear</span>          Bersihkan layar
+<span class="c-green">neofetch</span>       Informasi sistem
+<span class="c-green">matrix</span>         Jalankan simulasi Matrix
+<span class="c-green">whoami</span>         User saat ini
+<span class="c-green">uptime</span>         Waktu aktif sistem
+<span class="c-green">exit</span>           Restart VM
+        `);
+    },
+
+    whoami: () => print("root"),
+
+    uptime: () => {
+        const time = Math.floor(performance.now() / 1000);
+        print(`up ${time} seconds, load average: 0.00, 0.01, 0.05`);
+    },
+
+    ls: () => {
+        const dir = getDir(currentDir);
+        const items = Object.keys(dir).map(item => {
+            return typeof dir[item] === 'object' ? `<span class="c-amber bold">${item}/</span>` : item;
+        });
+        print(items.join('  ') || "Direktori kosong");
+    },
+
+    cd: (args) => {
+        const target = args[0];
+        if (!target || target === "~") {
+            currentDir = "~";
+        } else if (target === "..") {
+            currentDir = "~"; // Simple flat FS for this demo
+        } else {
+            const dir = getDir(currentDir);
+            if (dir[target] && typeof dir[target] === 'object') {
+                currentDir = `~/${target}`;
+            } else {
+                print(`<span class="c-red">cd: ${target}: No such directory</span>`);
+                return;
+            }
+        }
+        pathDisplay.textContent = currentDir;
+    },
+
+    cat: (args) => {
+        const file = args[0];
+        const dir = getDir(currentDir);
+        if (dir[file] && typeof dir[file] === 'string') {
+            print(dir[file]);
+        } else {
+            print(`<span class="c-red">cat: ${file}: No such file</span>`);
+        }
+    },
+
+    mkdir: (args) => {
+        const name = args[0];
+        if (!name) return print("mkdir: missing operand");
+        const dir = getDir(currentDir);
+        dir[name] = {};
+        print(`Directory '${name}' created.`);
+    },
+
+    neofetch: () => {
+        print(`
+<span class="c-green">       _,met$$$$$gg.</span>          <span class="c-amber">root</span>@<span class="c-amber">shadow-vm</span>
+<span class="c-green">    ,g$$$$$$$$$$$$$$$P.</span>       -----------------
+<span class="c-green">  ,g$$P"     """Y$$.".</span>        <span class="c-green">OS</span>: ShadowOS 3.0.0 aarch64
+<span class="c-green"> ,$$P'              \`$$$.</span>     <span class="c-green">Kernel</span>: 5.10.0-shadow-main
+<span class="c-green">',$$P       ,ggs.     \`$$b:</span>   <span class="c-green">Uptime</span>: ${Math.floor(performance.now()/60000)} mins
+<span class="c-green">\`d$$'     ,$P"'   .    $$$</span>    <span class="c-green">Packages</span>: 420 (dpkg)
+<span class="c-green"> $$P      d$'     ,    $$P</span>    <span class="c-green">Shell</span>: shadow-sh 1.0
+<span class="c-green"> $$:      $$.   -    ,d$$'</span>    <span class="c-green">Terminal</span>: XTerm-256color
+<span class="c-green"> $$;      Y$b._   _,d$P'</span>      <span class="c-green">CPU</span>: ARM Cortex-A53 (4) @ 1.4GHz
+<span class="c-green"> Y$$.    \`.\`"Y$$$$P"'</span>         <span class="c-green">Memory</span>: 512MB / 1536MB
+<span class="c-green"> \`$$b      "-.__</span>
+        `);
+    },
+
+    matrix: () => {
+        canvas.style.display = 'block';
+        startMatrix();
+        print("Matrix simulation started. Press Ctrl+C to stop (or wait 10s).");
+        setTimeout(() => {
+            canvas.style.display = 'none';
+            stopMatrix();
+        }, 10000);
+    },
+
+    clear: () => out.innerHTML = '',
+
+    exit: () => {
+        print("System rebooting...");
+        setTimeout(() => location.reload(), 1000);
+    }
+};
+
+function getDir(path) {
+    if (path === "~") return fs["~"];
+    const parts = path.split('/');
+    return fs["~"][parts[1]] || fs["~"];
+}
+
+// --- Matrix Animation ---
+let matrixInterval;
+function startMatrix() {
+    canvas.width = window.innerWidth;
+    canvas.height = window.innerHeight;
+    const chars = "0123456789ABCDEF";
+    const fontSize = 14;
+    const columns = canvas.width / fontSize;
+    const drops = Array(Math.floor(columns)).fill(1);
+    function draw() {
+        ctx.fillStyle = "rgba(0, 0, 0, 0.05)";
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        ctx.fillStyle = "#0F0";
+        for (let i = 0; i < drops.length; i++) {
+            const text = chars[Math.floor(Math.random() * chars.length)];
+            ctx.fillText(text, i * fontSize, drops[i] * fontSize);
+            if (drops[i] * fontSize > canvas.height && Math.random() > 0.975) drops[i] = 0;
+            drops[i]++;
+        }
+    }
+    matrixInterval = setInterval(draw, 33);
+}
+function stopMatrix() { clearInterval(matrixInterval); }
+
+// Resize listener untuk matrix
+window.addEventListener('resize', () => {
+    if (canvas.style.display === 'block') {
+        canvas.width = window.innerWidth;
+        canvas.height = window.innerHeight;
+    }
+});
+
+// --- Input & History ---
+const history = [];
+let histIdx = -1;
+
+function exec() {
+    const raw = inp.value.trim();
+    if (!raw) return;
+
+    print(`<span class="prompt">root@shadow:</span><span class="prompt-path">${currentDir}</span># <span class="c-white">${raw}</span>`);
+    
+    const [cmd, ...args] = raw.split(' ');
+    if (COMMANDS[cmd]) COMMANDS[cmd](args);
+    else print(`<span class="c-red">Command not found: ${cmd}</span>`);
+
+    history.unshift(raw);
+    histIdx = -1;
+    inp.value = '';
+    inp.focus();
+}
+
+inp.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') exec();
+    if (e.key === 'ArrowUp') handleTool('UP');
+    if (e.key === 'ArrowDown') handleTool('DOWN');
+    if (e.key === 'Tab') { e.preventDefault(); handleTool('TAB'); }
+});
+
+// Handler Tombol Mobile
+function handleTool(action) {
+    inp.focus();
+    if (action === 'TAB') {
+        const partial = inp.value.toLowerCase();
+        const match = Object.keys(COMMANDS).find(c => c.startsWith(partial));
+        if (match) inp.value = match;
+    } else if (action === 'UP') {
+        if (histIdx < history.length - 1) {
+            histIdx++;
+            inp.value = history[histIdx];
+        }
+    } else if (action === 'DOWN') {
+        if (histIdx > 0) {
+            histIdx--;
+            inp.value = history[histIdx];
+        } else {
+            histIdx = -1;
+            inp.value = '';
+        }
+    } else if (action === 'CLR') {
+        inp.value = '';
+    }
+}
+
+// Auto-focus tetap jalan di HP
+document.addEventListener('click', (e) => {
+    if (e.target.tagName !== 'BUTTON') inp.focus();
+});
+
+// Boot
+const bootLines = [
+    "Initializing Shadow Kernel v3.0.0...",
+    "System: <span class='c-green'>READY</span>",
+    "Type 'help' to begin."
+];
+bootLines.forEach((line, i) => setTimeout(() => print(line), i * 300));
+
+</script>
+</body>
+</html>

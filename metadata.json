@@ -1,6 +1,0 @@
-{
-  "name": "SHADOW VM Terminal",
-  "description": "A high-performance terminal simulator with a virtual file system and Matrix-inspired visuals.",
-  "requestFramePermissions": [],
-  "majorCapabilities": []
-}
